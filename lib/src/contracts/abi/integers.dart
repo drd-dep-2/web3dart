@@ -1,11 +1,18 @@
-part of 'package:web3dart/contracts.dart';
+import 'dart:typed_data';
+
+import 'package:meta/meta.dart';
+
+import '../../../credentials.dart';
+import '../../crypto/formatting.dart';
+import '../../utils/length_tracking_byte_sink.dart';
+import 'types.dart';
 
 abstract class _IntTypeBase extends AbiType<BigInt> {
   /// The length of this uint, int bits. Must be a multiple of 8.
   final int length;
 
   @override
-  final EncodingLengthInfo encodingLength =
+  EncodingLengthInfo get encodingLength =>
       const EncodingLengthInfo(sizeUnitBytes);
 
   String get _namePrefix;
@@ -16,6 +23,13 @@ abstract class _IntTypeBase extends AbiType<BigInt> {
       : assert(length % 8 == 0),
         assert(0 < length && length <= 256);
 
+  @internal
+  void validate() {
+    if (length % 8 != 0 || length < 0 || length > 256) {
+      throw Exception('Invalid length for int type: was $length');
+    }
+  }
+
   @override
   DecodingResult<BigInt> decode(ByteBuffer buffer, int offset) {
     // we're always going to read a 32-byte block for integers
@@ -25,12 +39,17 @@ abstract class _IntTypeBase extends AbiType<BigInt> {
   }
 
   BigInt _decode32Bytes(Uint8List data);
+
+  @override
+  String toString() {
+    return '$runtimeType(length = $length)';
+  }
 }
 
 /// The solidity uint<M> type that encodes unsigned integers.
 class UintType extends _IntTypeBase {
   @override
-  final String _namePrefix = 'uint';
+  String get _namePrefix => 'uint';
 
   const UintType({int length = 256}) : super(length);
 
@@ -39,7 +58,7 @@ class UintType extends _IntTypeBase {
     assert(data < BigInt.one << length);
     assert(!data.isNegative);
 
-    final bytes = intToBytes(data);
+    final bytes = unsignedIntToBytes(data);
     final padLen = calculatePadLength(bytes.length);
     buffer
       ..add(Uint8List(padLen)) // will be filled with 0
@@ -48,7 +67,7 @@ class UintType extends _IntTypeBase {
 
   void encodeReplace(
       int startIndex, BigInt data, LengthTrackingByteSink buffer) {
-    final bytes = intToBytes(data);
+    final bytes = unsignedIntToBytes(data);
     final padLen = calculatePadLength(bytes.length);
 
     buffer
@@ -60,7 +79,7 @@ class UintType extends _IntTypeBase {
   BigInt _decode32Bytes(Uint8List data) {
     // The padded zeroes won't make a difference when parsing so we can ignore
     // them.
-    return bytesToInt(data);
+    return bytesToUnsignedInt(data);
   }
 
   @override
@@ -80,15 +99,17 @@ class AddressType extends AbiType<EthereumAddress> {
   static const _paddingLen = sizeUnitBytes - EthereumAddress.addressByteLength;
 
   @override
-  final EncodingLengthInfo encodingLength =
+  EncodingLengthInfo get encodingLength =>
       const EncodingLengthInfo(sizeUnitBytes);
 
   @override
-  final String name = 'address';
+  String get name => 'address';
 
   @override
   void encode(EthereumAddress data, LengthTrackingByteSink buffer) {
-    buffer..add(Uint8List(_paddingLen))..add(data.addressBytes);
+    buffer
+      ..add(Uint8List(_paddingLen))
+      ..add(data.addressBytes);
   }
 
   @override
@@ -116,11 +137,11 @@ class BoolType extends AbiType<bool> {
   const BoolType();
 
   @override
-  final EncodingLengthInfo encodingLength =
+  EncodingLengthInfo get encodingLength =>
       const EncodingLengthInfo(sizeUnitBytes);
 
   @override
-  final String name = 'bool';
+  String get name => 'bool';
 
   @override
   void encode(bool data, LengthTrackingByteSink buffer) {
@@ -139,7 +160,7 @@ class BoolType extends AbiType<bool> {
   int get hashCode => runtimeType.hashCode;
 
   @override
-  bool operator ==(other) {
+  bool operator ==(dynamic other) {
     return other.runtimeType == BoolType;
   }
 }
@@ -147,7 +168,7 @@ class BoolType extends AbiType<bool> {
 /// The solidity int<M> types that encodes twos-complement integers.
 class IntType extends _IntTypeBase {
   @override
-  final String _namePrefix = 'int';
+  String get _namePrefix => 'int';
 
   const IntType({int length = 256}) : super(length);
 
@@ -158,9 +179,9 @@ class IntType extends _IntTypeBase {
 
     if (negative) {
       // twos complement
-      bytesData = intToBytes((BigInt.one << length) + data);
+      bytesData = unsignedIntToBytes((BigInt.one << length) + data);
     } else {
-      bytesData = intToBytes(data);
+      bytesData = unsignedIntToBytes(data);
     }
 
     final padLen = calculatePadLength(bytesData.length);
@@ -177,12 +198,7 @@ class IntType extends _IntTypeBase {
 
   @override
   BigInt _decode32Bytes(Uint8List data) {
-    final negative = data[0] >= 128; // first bit set?
-    final parsedAsUnsigned = bytesToInt(data);
-
-    return negative
-        ? (-(BigInt.one << length) + parsedAsUnsigned)
-        : parsedAsUnsigned;
+    return bytesToInt(data);
   }
 
   @override

@@ -1,5 +1,5 @@
-import 'package:test_api/test_api.dart';
-import 'package:web3dart/web3dart.dart';
+import 'package:test/test.dart';
+import 'package:web3dart/contracts.dart';
 
 import 'utils.dart';
 
@@ -18,7 +18,7 @@ const encoded =
     '776f726c64000000000000000000000000000000000000000000000000000000';
 
 void main() {
-  final type = const FixedLengthArray(type: StringType(), length: 2);
+  const type = FixedLengthArray(type: StringType(), length: 2);
 
   test('encodes', () {
     expectEncodes(type, ['Hello', 'world'], encoded);

@@ -21,45 +21,42 @@ typedef SocketConnector = StreamChannel<String> Function();
 /// to create transactions, you will instead have to obtain private keys of
 /// accounts yourself.
 class Web3Client {
+  /// Starts a client that connects to a JSON rpc API, available at [url]. The
+  /// [httpClient] will be used to send requests to the rpc server.
+  /// Am isolate will be used to perform expensive operations, such as signing
+  /// transactions or computing private keys.
+  Web3Client(String url, Client httpClient, {SocketConnector? socketConnector})
+      : this.custom(JsonRPC(url, httpClient), socketConnector: socketConnector);
+
+  Web3Client.custom(RpcService rpc, {this.socketConnector}) : _jsonRpc = rpc {
+    _filters = _FilterEngine(this);
+  }
+
   static const BlockNum _defaultBlock = BlockNum.current();
 
-  final JsonRPC _jsonRpc;
+  final RpcService _jsonRpc;
 
   /// Some ethereum nodes support an event channel over websockets. Web3dart
   /// will use the [StreamChannel] returned by this function as a socket to send
   /// event requests and parse responses. Can be null, in which case a polling
   /// implementation for events will be used.
   @experimental
-  final SocketConnector socketConnector;
+  final SocketConnector? socketConnector;
 
-  rpc.Peer _streamRpcPeer;
-
-  _ExpensiveOperations _operations;
-  _FilterEngine _filters;
+  rpc.Peer? _streamRpcPeer;
+  late final _FilterEngine _filters;
 
   ///Whether errors, handled or not, should be printed to the console.
   bool printErrors = false;
 
-  /// Starts a client that connects to a JSON rpc API, available at [url]. The
-  /// [httpClient] will be used to send requests to the rpc server.
-  /// If [enableBackgroundIsolate] is true (defaults to false), expensive
-  /// methods like [credentialsFromPrivateKey] or [sendTransaction] will use
-  /// a background isolate instead of blocking the main thread. This feature
-  /// is experimental at the moment.
-  Web3Client(String url, Client httpClient,
-      {bool enableBackgroundIsolate = false, this.socketConnector})
-      : _jsonRpc = JsonRPC(url, httpClient) {
-    _operations = _ExpensiveOperations(enableBackgroundIsolate);
-    _filters = _FilterEngine(this);
-  }
-
-  Future<T> _makeRPCCall<T>(String function, [List<dynamic> params]) async {
+  Future<T> _makeRPCCall<T>(String function, [List<dynamic>? params]) async {
     try {
       final data = await _jsonRpc.call(function, params);
       // ignore: only_throw_errors
       if (data is Error || data is Exception) throw data;
 
       return data.result as T;
+      // ignore: avoid_catches_without_on_clauses
     } catch (e) {
       if (printErrors) print(e);
 
@@ -67,18 +64,17 @@ class Web3Client {
     }
   }
 
-  rpc.Peer _connectWithPeer() {
-    if (_streamRpcPeer != null && !_streamRpcPeer.isClosed)
+  rpc.Peer? _connectWithPeer() {
+    if (_streamRpcPeer != null && !_streamRpcPeer!.isClosed) {
       return _streamRpcPeer;
+    }
     if (socketConnector == null) return null;
 
-    final socket = socketConnector();
+    final socket = socketConnector!();
     _streamRpcPeer = rpc.Peer(socket)
-      ..registerMethod('eth_subscription', (rpc.Parameters params) {
-        _filters.handlePubSubNotification(params);
-      });
+      ..registerMethod('eth_subscription', _filters.handlePubSubNotification);
 
-    _streamRpcPeer.listen().then((_) {
+    _streamRpcPeer?.listen().then((_) {
       // .listen() will complete when the socket is closed, so reset client
       _streamRpcPeer = null;
       _filters.handleConnectionClosed();
@@ -87,14 +83,15 @@ class Web3Client {
     return _streamRpcPeer;
   }
 
-  String _getBlockParam(BlockNum block) {
+  String _getBlockParam(BlockNum? block) {
     return (block ?? _defaultBlock).toBlockParam();
   }
 
   /// Constructs a new [Credentials] with the provided [privateKey] by using
   /// an [EthPrivateKey].
-  Future<Credentials> credentialsFromPrivateKey(String privateKey) {
-    return _operations.privateKeyFromHex(privateKey);
+  @Deprecated('Use EthPrivateKey.fromHex instead')
+  Future<EthPrivateKey> credentialsFromPrivateKey(String privateKey) {
+    return Future.value(EthPrivateKey.fromHex(privateKey));
   }
 
   /// Returns the version of the client we're sending requests to.
@@ -113,6 +110,10 @@ class Web3Client {
   /// 42: Kovan Testnet
   Future<int> getNetworkId() {
     return _makeRPCCall<String>('net_version').then(int.parse);
+  }
+
+  Future<BigInt> getChainId() {
+    return _makeRPCCall<String>('eth_chainId').then(BigInt.parse);
   }
 
   /// Returns true if the node is actively listening for network connections.
@@ -144,14 +145,14 @@ class Web3Client {
       final currentBlock = hexToInt(data['currentBlock'] as String).toInt();
       final highestBlock = hexToInt(data['highestBlock'] as String).toInt();
 
-      return SyncInformation._(startingBlock, currentBlock, highestBlock);
+      return SyncInformation(startingBlock, currentBlock, highestBlock);
     } else {
-      return SyncInformation._(null, null, null);
+      return SyncInformation(null, null, null);
     }
   }
 
   Future<EthereumAddress> coinbaseAddress() async {
-    final hex = await _makeRPCCall<String>('eth_coinbare');
+    final hex = await _makeRPCCall<String>('eth_coinbase');
     return EthereumAddress.fromHex(hex);
   }
 
@@ -182,11 +183,18 @@ class Web3Client {
         .then((s) => hexToInt(s).toInt());
   }
 
+  Future<BlockInformation> getBlockInformation(
+      {String blockNumber = 'latest', bool isContainFullObj = true}) {
+    return _makeRPCCall<Map<String, dynamic>>(
+            'eth_getBlockByNumber', [blockNumber, isContainFullObj])
+        .then((Map<String, dynamic> json) => BlockInformation.fromJson(json));
+  }
+
   /// Gets the balance of the account with the specified address.
   ///
   /// This function allows specifying a custom block mined in the past to get
   /// historical data. By default, [BlockNum.current] will be used.
-  Future<EtherAmount> getBalance(EthereumAddress address, {BlockNum atBlock}) {
+  Future<EtherAmount> getBalance(EthereumAddress address, {BlockNum? atBlock}) {
     final blockParam = _getBlockParam(atBlock);
 
     return _makeRPCCall<String>('eth_getBalance', [address.hex, blockParam])
@@ -202,7 +210,7 @@ class Web3Client {
   /// This function allows specifying a custom block mined in the past to get
   /// historical data. By default, [BlockNum.current] will be used.
   Future<Uint8List> getStorage(EthereumAddress address, BigInt position,
-      {BlockNum atBlock}) {
+      {BlockNum? atBlock}) {
     final blockParam = _getBlockParam(atBlock);
 
     return _makeRPCCall<String>('eth_getStorageAt', [
@@ -216,7 +224,8 @@ class Web3Client {
   ///
   /// This function allows specifying a custom block mined in the past to get
   /// historical data. By default, [BlockNum.current] will be used.
-  Future<int> getTransactionCount(EthereumAddress address, {BlockNum atBlock}) {
+  Future<int> getTransactionCount(EthereumAddress address,
+      {BlockNum? atBlock}) {
     final blockParam = _getBlockParam(atBlock);
 
     return _makeRPCCall<String>(
@@ -233,19 +242,32 @@ class Web3Client {
   }
 
   /// Returns an receipt of a transaction based on its hash.
-  Future<TransactionReceipt> getTransactionReceipt(String hash) {
-    return _makeRPCCall<Map<String, dynamic>>(
+  Future<TransactionReceipt?> getTransactionReceipt(String hash) {
+    return _makeRPCCall<Map<String, dynamic>?>(
             'eth_getTransactionReceipt', [hash])
-        .then((s) => s != null ? TransactionReceipt.fromJson(s) : null);
+        .then((s) => s != null ? TransactionReceipt.fromMap(s) : null);
   }
 
   /// Gets the code of a contract at the specified [address]
   ///
   /// This function allows specifying a custom block mined in the past to get
   /// historical data. By default, [BlockNum.current] will be used.
-  Future<Uint8List> getCode(EthereumAddress address, {BlockNum atBlock}) {
+  Future<Uint8List> getCode(EthereumAddress address, {BlockNum? atBlock}) {
     return _makeRPCCall<String>(
         'eth_getCode', [address.hex, _getBlockParam(atBlock)]).then(hexToBytes);
+  }
+
+  /// Returns all logs matched by the filter in [options].
+  ///
+  /// See also:
+  ///  - [events], which can be used to obtain a stream of log events
+  ///  - https://github.com/ethereum/wiki/wiki/JSON-RPC#eth_getlogs
+  Future<List<FilterEvent>> getLogs(FilterOptions options) {
+    final filter = _EventFilter(options);
+    return _makeRPCCall<List<dynamic>>(
+        'eth_getLogs', [filter._createParamsObject(true)]).then((logs) {
+      return logs.map(filter.parseChanges).toList();
+    });
   }
 
   /// Signs the given transaction using the keys supplied in the [cred]
@@ -255,12 +277,32 @@ class Web3Client {
   /// included in a mined block, can be used to obtain detailed information
   /// about the transaction.
   Future<String> sendTransaction(Credentials cred, Transaction transaction,
-      {int chainId = 1, bool fetchChainIdFromNetworkId = false}) async {
-    final signed = await signTransaction(cred, transaction,
-        chainId: chainId, fetchChainIdFromNetworkId: fetchChainIdFromNetworkId);
+      {int? chainId = 1, bool fetchChainIdFromNetworkId = false}) async {
+    if (cred is CustomTransactionSender) {
+      return cred.sendTransaction(transaction);
+    }
 
-    return _makeRPCCall('eth_sendRawTransaction',
-        [bytesToHex(signed, include0x: true, padToEvenLength: true)]);
+    var signed = await signTransaction(cred, transaction,
+        chainId: chainId, fetchChainIdFromNetworkId: fetchChainIdFromNetworkId);
+    print("signed: $signed");
+    if (transaction.isEIP1559) {
+      signed = prependTransactionType(0x02, signed);
+    }
+
+    return sendRawTransaction(signed);
+  }
+
+  /// Sends a raw, signed transaction.
+  ///
+  /// To obtain a transaction in a signed form, use [signTransaction].
+  ///
+  /// Returns a hash of the transaction which, after the transaction has been
+  /// included in a mined block, can be used to obtain detailed information
+  /// about the transaction.
+  Future<String> sendRawTransaction(Uint8List signedTransaction) async {
+    return _makeRPCCall('eth_sendRawTransaction', [
+      bytesToHex(signedTransaction, include0x: true, padToEvenLength: true)
+    ]);
   }
 
   /// Signs the [transaction] with the credentials [cred]. The transaction will
@@ -270,7 +312,7 @@ class Web3Client {
   ///  - [bytesToHex], which can be used to get the more common hexadecimal
   /// representation of the transaction.
   Future<Uint8List> signTransaction(Credentials cred, Transaction transaction,
-      {int chainId = 1, bool fetchChainIdFromNetworkId = false}) async {
+      {int? chainId = 1, bool fetchChainIdFromNetworkId = false}) async {
     final signingInput = await _fillMissingData(
       credentials: cred,
       transaction: transaction,
@@ -279,7 +321,8 @@ class Web3Client {
       client: this,
     );
 
-    return _operations.signTransaction(signingInput);
+    return _signTransaction(signingInput.transaction, signingInput.credentials,
+        signingInput.chainId);
   }
 
   /// Calls a [function] defined in the smart [contract] and returns it's
@@ -295,19 +338,56 @@ class Web3Client {
   /// This function allows specifying a custom block mined in the past to get
   /// historical data. By default, [BlockNum.current] will be used.
   Future<List<dynamic>> call({
-    EthereumAddress sender,
-    @required DeployedContract contract,
-    @required ContractFunction function,
-    @required List<dynamic> params,
-    BlockNum atBlock,
+    EthereumAddress? sender,
+    required DeployedContract contract,
+    required ContractFunction function,
+    required List<dynamic> params,
+    BlockNum? atBlock,
   }) async {
     final encodedResult = await callRaw(
       sender: sender,
       contract: contract.address,
       data: function.encodeCall(params),
+      atBlock: atBlock,
     );
 
     return function.decodeReturnValues(encodedResult);
+  }
+
+  /// Estimate the amount of gas that would be necessary if the transaction was
+  /// sent via [sendTransaction]. Note that the estimate may be significantly
+  /// higher than the amount of gas actually used by the transaction.
+  Future<BigInt> estimateGas({
+    EthereumAddress? sender,
+    EthereumAddress? to,
+    EtherAmount? value,
+    BigInt? amountOfGas,
+    EtherAmount? gasPrice,
+    EtherAmount? maxPriorityFeePerGas,
+    EtherAmount? maxFeePerGas,
+    Uint8List? data,
+    @Deprecated('Parameter is ignored') BlockNum? atBlock,
+  }) async {
+    final amountHex = await _makeRPCCall<String>(
+      'eth_estimateGas',
+      [
+        {
+          if (sender != null) 'from': sender.hex,
+          if (to != null) 'to': to.hex,
+          if (amountOfGas != null) 'gas': '0x${amountOfGas.toRadixString(16)}',
+          if (gasPrice != null)
+            'gasPrice': '0x${gasPrice.getInWei.toRadixString(16)}',
+          if (maxPriorityFeePerGas != null)
+            'maxPriorityFeePerGas':
+                '0x${maxPriorityFeePerGas.getInWei.toRadixString(16)}',
+          if (maxFeePerGas != null)
+            'maxFeePerGas': '0x${maxFeePerGas.getInWei.toRadixString(16)}',
+          if (value != null) 'value': '0x${value.getInWei.toRadixString(16)}',
+          if (data != null) 'data': bytesToHex(data, include0x: true),
+        },
+      ],
+    );
+    return hexToInt(amountHex);
   }
 
   /// Sends a raw method call to a smart contract.
@@ -325,19 +405,17 @@ class Web3Client {
   /// See also:
   /// - [call], which automatically encodes function parameters and parses a
   /// response.
-  Future<String> callRaw(
-      {EthereumAddress sender,
-      @required EthereumAddress contract,
-      @required Uint8List data,
-      BlockNum atBlock}) {
+  Future<String> callRaw({
+    EthereumAddress? sender,
+    required EthereumAddress contract,
+    required Uint8List data,
+    BlockNum? atBlock,
+  }) {
     final call = {
       'to': contract.hex,
       'data': bytesToHex(data, include0x: true, padToEvenLength: true),
+      if (sender != null) 'from': sender.hex,
     };
-
-    if (sender != null) {
-      call['from'] = sender.hex;
-    }
 
     return _makeRPCCall<String>('eth_call', [call, _getBlockParam(atBlock)]);
   }
@@ -377,13 +455,20 @@ class Web3Client {
   /// - https://solidity.readthedocs.io/en/develop/contracts.html#events, which
   /// explains more about how events are encoded.
   Stream<FilterEvent> events(FilterOptions options) {
+    if (socketConnector != null) {
+      // The real-time rpc nodes don't support listening to old data, so handle
+      // that here.
+      return Stream.fromFuture(getLogs(options))
+          .expand((e) => e)
+          .followedBy(_filters.addFilter(_EventFilter(options)));
+    }
+
     return _filters.addFilter(_EventFilter(options));
   }
 
   /// Closes resources managed by this client, such as the optional background
   /// isolate for calculations and managed streams.
   Future<void> dispose() async {
-    await _operations.stop();
     await _filters.dispose();
     await _streamRpcPeer?.close();
   }

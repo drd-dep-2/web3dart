@@ -1,5 +1,3 @@
-part of 'package:web3dart/web3dart.dart';
-
 /// For operations that are reading data from the blockchain without making a
 /// transaction that would modify it, the Ethereum client can read that data
 /// from previous states of the blockchain as well. This class specifies which
@@ -7,8 +5,6 @@ part of 'package:web3dart/web3dart.dart';
 class BlockNum {
   final bool useAbsolute;
   final int blockNum;
-
-  const BlockNum._(this.useAbsolute, this.blockNum);
 
   bool get isPending => !useAbsolute && blockNum == 2;
 
@@ -46,4 +42,22 @@ class BlockNum {
         return 'latest'; //Can't happen, though
     }
   }
+
+  @override
+  String toString() {
+    if (useAbsolute) return blockNum.toString();
+
+    return toBlockParam();
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is BlockNum &&
+          runtimeType == other.runtimeType &&
+          useAbsolute == other.useAbsolute &&
+          blockNum == other.blockNum;
+
+  @override
+  int get hashCode => useAbsolute.hashCode ^ blockNum.hashCode;
 }

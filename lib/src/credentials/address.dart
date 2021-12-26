@@ -1,4 +1,11 @@
-part of 'package:web3dart/credentials.dart';
+import 'dart:typed_data';
+
+import 'package:collection/collection.dart';
+import 'package:meta/meta.dart';
+
+import '../crypto/formatting.dart';
+import '../crypto/keccak.dart';
+import '../crypto/secp256k1.dart';
 
 /// Represents an Ethereum address.
 @immutable
@@ -12,7 +19,7 @@ class EthereumAddress {
   final Uint8List addressBytes;
 
   /// An ethereum address from the raw address bytes.
-  EthereumAddress(this.addressBytes)
+  const EthereumAddress(this.addressBytes)
       : assert(addressBytes.length == addressByteLength);
 
   /// Constructs an Ethereum address from a public key. The address is formed by
@@ -90,7 +97,8 @@ class EthereumAddress {
   @override
   bool operator ==(other) {
     return identical(this, other) ||
-        (other is EthereumAddress && other.hex == hex);
+        (other is EthereumAddress &&
+            const ListEquality().equals(addressBytes, other.addressBytes));
   }
 
   @override

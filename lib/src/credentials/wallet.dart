@@ -1,4 +1,23 @@
-part of 'package:web3dart/credentials.dart';
+import 'dart:convert';
+import 'dart:math';
+import 'dart:typed_data';
+
+import 'package:meta/meta.dart';
+import 'package:pointycastle/api.dart';
+import 'package:pointycastle/block/aes.dart';
+import 'package:pointycastle/digests/sha256.dart';
+import 'package:pointycastle/key_derivators/api.dart';
+import 'package:pointycastle/key_derivators/pbkdf2.dart' as pbkdf2;
+import 'package:pointycastle/key_derivators/scrypt.dart' as scrypt;
+import 'package:pointycastle/macs/hmac.dart';
+import 'package:pointycastle/stream/ctr.dart';
+
+import '../crypto/formatting.dart';
+import '../crypto/keccak.dart';
+import '../crypto/random_bridge.dart';
+import '../utils/typed_data.dart';
+import '../utils/uuid.dart';
+import 'credentials.dart';
 
 abstract class _KeyDerivator {
   Uint8List deriveKey(Uint8List password);
@@ -121,14 +140,14 @@ class Wallet {
   /// You can configure the parameter N of the scrypt algorithm if you need to.
   /// The default value for [scryptN] is 8192. Be aware that this N must be a
   /// power of two.
-  static Wallet createNew(
+  factory Wallet.createNew(
       EthPrivateKey credentials, String password, Random random,
-      {int scryptN = 8192}) {
+      {int scryptN = 8192, int p = 1}) {
     final passwordBytes = Uint8List.fromList(utf8.encode(password));
     final dartRandom = RandomBridge(random);
 
     final salt = dartRandom.nextBytes(32);
-    final derivator = _ScryptKeyDerivator(32, scryptN, 8, 1, salt);
+    final derivator = _ScryptKeyDerivator(32, scryptN, 8, p, salt);
 
     final uuid = generateUuidV4();
 
@@ -140,7 +159,7 @@ class Wallet {
   /// Reads and unlocks the wallet denoted in the json string given with the
   /// specified [password]. [encoded] must be the String contents of a valid
   /// v3 Ethereum wallet file.
-  static Wallet fromJson(String encoded, String password) {
+  factory Wallet.fromJson(String encoded, String password) {
     /*
       In order to read the wallet and obtain the secret key stored in it, we
       need to do the following:
@@ -207,9 +226,10 @@ class Wallet {
 
     //Validate the derived key with the mac provided
     final derivedMac = _generateMac(derivedKey, encryptedPrivateKey);
-    if (derivedMac != crypto['mac'])
+    if (derivedMac != crypto['mac']) {
       throw ArgumentError(
           'Could not unlock wallet file. You either supplied the wrong password or the file is corrupted');
+    }
 
     // We only support this mode at the moment
     if (crypto['cipher'] != 'aes-128-ctr') {
@@ -232,14 +252,14 @@ class Wallet {
   }
 
   static String _generateMac(List<int> dk, List<int> ciphertext) {
-    final macBody = <int>[]..addAll(dk.sublist(16, 32))..addAll(ciphertext);
+    final macBody = <int>[...dk.sublist(16, 32), ...ciphertext];
 
     return bytesToHex(keccak256(uint8ListFromList(macBody)));
   }
 
   static CTRStreamCipher _initCipher(
       bool forEncryption, Uint8List key, Uint8List iv) {
-    return CTRStreamCipher(AESFastEngine())
+    return CTRStreamCipher(AESEngine())
       ..init(false, ParametersWithIV(KeyParameter(key), iv));
   }
 

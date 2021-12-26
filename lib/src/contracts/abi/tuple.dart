@@ -1,4 +1,8 @@
-part of 'package:web3dart/contracts.dart';
+import 'dart:typed_data';
+
+import '../../utils/length_tracking_byte_sink.dart';
+import 'integers.dart';
+import 'types.dart';
 
 class TupleType extends AbiType<List<dynamic>> {
   /// The types used to encode the individual components of this tuple.
@@ -27,11 +31,11 @@ class TupleType extends AbiType<List<dynamic>> {
 
     // tuples are dynamic iff any of their member types is dynamic. Otherwise,
     // it's just all static members concatenated, together.
-    for (var type in types) {
+    for (final type in types) {
       final length = type.encodingLength;
       if (length.isDynamic) return const EncodingLengthInfo.dynamic();
 
-      trackedLength += length.length;
+      trackedLength += length.length!;
     }
 
     return EncodingLengthInfo(trackedLength);
@@ -87,7 +91,7 @@ class TupleType extends AbiType<List<dynamic>> {
     var headersLength = 0;
     var dynamicLength = 0;
 
-    for (var type in types) {
+    for (final type in types) {
       if (type.encodingLength.isDynamic) {
         final positionResult =
             const UintType().decode(buffer, offset + headersLength);

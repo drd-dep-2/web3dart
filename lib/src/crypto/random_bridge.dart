@@ -21,7 +21,7 @@ class RandomBridge implements SecureRandom {
 
     // Generate a number from the full bytes. Then, prepend a smaller number
     // covering the remaining bits.
-    final main = bytesToInt(nextBytes(fullBytes));
+    final main = bytesToUnsignedInt(nextBytes(fullBytes));
     final additional = dartRandom.nextInt(1 << remainingBits);
     return main + (BigInt.from(additional) << (fullBytes * 8));
   }
@@ -41,7 +41,10 @@ class RandomBridge implements SecureRandom {
   int nextUint16() => dartRandom.nextInt(1 << 16);
 
   @override
-  int nextUint32() => dartRandom.nextInt(1 << 32);
+  int nextUint32() {
+    // this is 2^32. We can't write 1 << 32 because that evaluates to 0 on js
+    return dartRandom.nextInt(4294967296);
+  }
 
   @override
   int nextUint8() => dartRandom.nextInt(1 << 8);

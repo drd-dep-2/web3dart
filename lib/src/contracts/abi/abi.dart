@@ -1,4 +1,12 @@
-part of 'package:web3dart/contracts.dart';
+import 'dart:convert';
+import 'dart:typed_data';
+
+import '../../crypto/formatting.dart';
+import '../../crypto/keccak.dart';
+import '../../utils/length_tracking_byte_sink.dart';
+import 'arrays.dart';
+import 'tuple.dart';
+import 'types.dart';
 
 enum ContractFunctionType {
   function,
@@ -65,15 +73,15 @@ class ContractAbi {
     final functions = <ContractFunction>[];
     final events = <ContractEvent>[];
 
-    for (var element in data) {
+    for (final element in data) {
       final type = element['type'] as String;
-      final name = (element['name'] as String) ?? '';
+      final name = (element['name'] as String?) ?? '';
 
       if (type == 'event') {
         final anonymous = element['anonymous'] as bool;
         final components = <EventComponent>[];
 
-        for (var entry in element['inputs']) {
+        for (final entry in element['inputs']) {
           components.add(EventComponent(
               _parseParam(entry as Map), entry['indexed'] as bool));
         }
@@ -84,27 +92,28 @@ class ContractAbi {
 
       final mutability = _mutabilityNames[element['stateMutability']];
       final parsedType = _functionTypeNames[element['type']];
+      if (parsedType == null) continue;
 
-      final inputs = _parseParams(element['inputs'] as List);
-      final outputs = _parseParams(element['outputs'] as List);
+      final inputs = _parseParams(element['inputs'] as List?);
+      final outputs = _parseParams(element['outputs'] as List?);
 
       functions.add(ContractFunction(
         name,
         inputs,
         outputs: outputs,
         type: parsedType,
-        mutability: mutability,
+        mutability: mutability ?? StateMutability.nonPayable,
       ));
     }
 
     return ContractAbi(name, functions, events);
   }
 
-  static List<FunctionParameter> _parseParams(List data) {
+  static List<FunctionParameter> _parseParams(List? data) {
     if (data == null || data.isEmpty) return [];
 
     final elements = <FunctionParameter>[];
-    for (var entry in data) {
+    for (final entry in data) {
       elements.add(_parseParam(entry as Map));
     }
 
@@ -131,18 +140,19 @@ class ContractAbi {
     assert(RegExp(r'^tuple(?:\[\d*\])*$').hasMatch(typeName),
         '$typeName is an invalid tuple type');
 
-    final arrayLengths = <int>[];
+    final arrayLengths = <int?>[];
     var remainingName = typeName;
 
     while (remainingName != 'tuple') {
-      final arrayMatch = _array.firstMatch(remainingName);
-      remainingName = arrayMatch.group(1);
+      final arrayMatch = array.firstMatch(remainingName)!;
+      remainingName = arrayMatch.group(1)!;
 
-      final insideSquareBrackets = arrayMatch.group(2);
-      if (insideSquareBrackets.isEmpty)
+      final insideSquareBrackets = arrayMatch.group(2)!;
+      if (insideSquareBrackets.isEmpty) {
         arrayLengths.insert(0, null);
-      else
+      } else {
         arrayLengths.insert(0, int.parse(insideSquareBrackets));
+      }
     }
 
     return CompositeFunctionParameter(name, components, arrayLengths);
@@ -218,13 +228,14 @@ class ContractFunction {
   ///
   /// Other types are not supported at the moment.
   Uint8List encodeCall(List<dynamic> params) {
-    if (params.length != parameters.length)
+    if (params.length != parameters.length) {
       throw ArgumentError.value(
           params.length, 'params', 'Must match function parameters');
+    }
 
     final sink = LengthTrackingByteSink()
       //First four bytes to identify the function with its parameters
-      ..add(keccakUtf8(encodeName()).sublist(0, 4));
+      ..add(selector);
 
     TupleType(parameters.map((param) => param.type).toList())
         .encode(params, sink);
@@ -240,6 +251,13 @@ class ContractFunction {
   String encodeName() {
     final parameterTypes = _encodeParameters(parameters);
     return '$name($parameterTypes)';
+  }
+
+  /// The selector of this function, as described [by solidity].
+  ///
+  /// [by solidity]: https://solidity.readthedocs.io/en/develop/abi-spec.html#function-selector
+  Uint8List get selector {
+    return keccakUtf8(encodeName()).sublist(0, 4);
   }
 
   /// Uses the known types of the function output to decode the value returned
@@ -269,20 +287,16 @@ class ContractEvent {
 
   ContractEvent(this.anonymous, this.name, this.components);
 
-  Uint8List _signature;
+  /// The user-visible signature of this event, consisting of its name and the
+  /// type of its parameters.
+  String get stringSignature {
+    final parameters = components.map((c) => c.parameter);
+    return '$name(${_encodeParameters(parameters)})';
+  }
 
   /// The signature of this event, which is the keccak hash of the event's name
   /// followed by it's components.
-  Uint8List get signature {
-    if (_signature == null) {
-      final parameters = components.map((c) => c.parameter);
-      final encodedName = '$name(${_encodeParameters(parameters)})';
-
-      _signature = keccakUtf8(encodedName);
-    }
-
-    return _signature;
-  }
+  late final Uint8List signature = keccakUtf8(stringSignature);
 
   /// Decodes the fields of this event from the event's [topics] and its [data]
   /// payload.
@@ -312,13 +326,13 @@ class ContractEvent {
     var topicIndex = topicOffset;
 
     final result = [];
-    for (var component in components) {
+    for (final component in components) {
       if (component.indexed) {
         // components that are bigger than 32 bytes when decoded, or have a
         // dynamic type, are not included in [topics]. A hash of the data will
         // be included instead. We can't decode these, so they will be skipped.
         final length = component.parameter.type.encodingLength;
-        if (length.isDynamic || length.length > 32) {
+        if (length.isDynamic || length.length! > 32) {
           topicIndex++;
           continue;
         }
@@ -380,16 +394,16 @@ class CompositeFunctionParameter extends FunctionParameter<dynamic> {
   /// arrays. For instance, given a struct `S`, the type `S[3][][4]` would be
   /// represented with a [CompositeFunctionParameter] that has the components of
   /// `S` and [arrayLengths] of `[3, null, 4]`.
-  final List<int> arrayLengths;
+  final List<int?> arrayLengths;
 
   CompositeFunctionParameter(String name, this.components, this.arrayLengths)
       : super(name, _constructType(components, arrayLengths));
 
   static AbiType<dynamic> _constructType(
-      List<FunctionParameter> components, List<int> arrayLengths) {
+      List<FunctionParameter> components, List<int?> arrayLengths) {
     AbiType type = TupleType(components.map((c) => c.type).toList());
 
-    for (var len in arrayLengths) {
+    for (final len in arrayLengths) {
       if (len != null) {
         type = FixedLengthArray(type: type, length: len);
       } else {

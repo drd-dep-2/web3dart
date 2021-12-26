@@ -14,6 +14,8 @@ class _PubSubCreationParams {
 }
 
 abstract class _Filter<T> {
+  bool get supportsPubSub => true;
+
   _FilterCreationParams create();
   _PubSubCreationParams createPubSub();
   T parseChanges(dynamic log);
@@ -21,12 +23,15 @@ abstract class _Filter<T> {
 
 class _NewBlockFilter extends _Filter<String> {
   @override
+  bool get supportsPubSub => false;
+
+  @override
   _FilterCreationParams create() {
     return _FilterCreationParams('eth_newBlockFilter', []);
   }
 
   @override
-  String parseChanges(log) {
+  String parseChanges(dynamic log) {
     return log as String;
   }
 
@@ -34,11 +39,14 @@ class _NewBlockFilter extends _Filter<String> {
   _PubSubCreationParams createPubSub() {
     // the pub-sub subscription for new blocks isn't universally supported by
     // ethereum nodes, so let's not implement it just yet.
-    return null;
+    return _PubSubCreationParams(List.empty());
   }
 }
 
 class _PendingTransactionsFilter extends _Filter<String> {
+  @override
+  bool get supportsPubSub => false;
+
   @override
   _FilterCreationParams create() {
     return _FilterCreationParams('eth_newPendingTransactionFilter', []);
@@ -51,31 +59,42 @@ class _PendingTransactionsFilter extends _Filter<String> {
 
   @override
   _PubSubCreationParams createPubSub() {
-    // TODO: implement createPubSub
-    return null;
+    return _PubSubCreationParams(List.empty());
   }
 }
 
 /// Options for event filters created with [Web3Client.events].
 class FilterOptions {
+  FilterOptions({this.fromBlock, this.toBlock, this.address, this.topics});
+
+  FilterOptions.events(
+      {required DeployedContract contract,
+      required ContractEvent event,
+      this.fromBlock,
+      this.toBlock})
+      : address = contract.address,
+        topics = [
+          [bytesToHex(event.signature, padToEvenLength: true, include0x: true)]
+        ];
+
   /// The earliest block which should be considered for this filter. Optional,
   /// the default value is [BlockNum.current].
   ///
   /// Use [BlockNum.current] for the last mined block or
   /// [BlockNum.pending]  for not yet mined transactions.
-  final BlockNum fromBlock;
+  final BlockNum? fromBlock;
 
   /// The last block which should be considered for this filter. Optional, the
   /// default value is [BlockNum.current].
   ///
   /// Use [BlockNum.current] for the last mined block or
   /// [BlockNum.pending]  for not yet mined transactions.
-  final BlockNum toBlock;
+  final BlockNum? toBlock;
 
   /// The optional address to limit this filter to. If not null, only logs
   /// emitted from the contract at [address] will be considered. Otherwise, all
   /// log events will be reported.
-  final EthereumAddress address;
+  final EthereumAddress? address;
 
   /// The topics that must be present in the event to be included in this
   /// filter. The topics must be represented as a hexadecimal value prefixed
@@ -85,8 +104,8 @@ class FilterOptions {
   /// will be matched by the following topic filters:
   /// - \[\], which matches anything
   /// - \[A\], which matches "A" in the first position and anything after
-  /// - \[null, B\], which matches logs that have A in their first position AND
-  /// B in their second position (and anything after)
+  /// - \[null, B\], which matches logs that have anything in their first
+  ///   position, B in their second position and anything after
   /// - \[A, B\], which matches A in first position, B in second position (and
   /// anything after)
   /// - \[\[A, B\], \[A, B\]\]: Matches (A or B) in first position AND (A or B)
@@ -97,61 +116,11 @@ class FilterOptions {
   /// All further topics are the encoded values of the indexed parameters of the
   /// event. See https://solidity.readthedocs.io/en/develop/contracts.html#events
   /// for a detailed description.
-  final List<List<String>> topics;
-
-  FilterOptions({this.fromBlock, this.toBlock, this.address, this.topics});
-
-  FilterOptions.events(
-      {@required DeployedContract contract,
-      @required ContractEvent event,
-      this.fromBlock,
-      this.toBlock})
-      : address = contract.address,
-        topics = [
-          [bytesToHex(event.signature, padToEvenLength: true, include0x: true)]
-        ];
+  final List<List<String>>? topics;
 }
 
 /// A log event emitted in a transaction.
 class FilterEvent {
-  /// Whether the log was removed, due to a chain reorganization. False if it's
-  /// a valid log.
-  final bool removed;
-
-  /// Log index position in the block. `null` when the transaction which caused
-  /// this log has not yet been mined.
-  final int logIndex;
-
-  /// Transaction index position in the block.
-  /// `null` when the transaction which caused this log has not yet been mined.
-  final int transactionIndex;
-
-  /// Hash of the transaction which caused this log. `null` when it's pending.
-  final String transactionHash;
-
-  /// Hash of the block where this log was in. `null` when it's pending.
-  final String blockHash;
-
-  /// The block number of the block where this log was in. `null` when it's
-  /// pending.
-  final int blockNum;
-
-  /// The address (of the smart contract) from which this log originated.
-  final EthereumAddress address;
-
-  /// The data blob of this log, hex-encoded.
-  ///
-  /// For solidity events, this contains all non-indexed parameters of the
-  /// event.
-  final String data;
-
-  /// The topics of this event, hex-encoded.
-  ///
-  /// For solidity events, the first topic is a hash of the event signature
-  /// (except for anonymous events). All further topics are the encoded
-  /// values of indexed parameters.
-  final List<String> topics;
-
   FilterEvent(
       {this.removed,
       this.logIndex,
@@ -162,6 +131,64 @@ class FilterEvent {
       this.address,
       this.data,
       this.topics});
+
+  FilterEvent.fromMap(Map<String, dynamic> log)
+      : removed = log['removed'] as bool? ?? false,
+        logIndex = log['logIndex'] != null
+            ? hexToInt(log['logIndex'] as String).toInt()
+            : null,
+        transactionIndex = log['transactionIndex'] != null
+            ? hexToInt(log['transactionIndex'] as String).toInt()
+            : null,
+        transactionHash = log['transactionHash'] != null
+            ? log['transactionHash'] as String
+            : null,
+        blockHash =
+            log['blockHash'] != null ? log['blockHash'] as String : null,
+        blockNum = log['blockNumber'] != null
+            ? hexToInt(log['blockNumber'] as String).toInt()
+            : null,
+        address = EthereumAddress.fromHex(log['address'] as String),
+        data = log['data'] as String?,
+        topics = (log['topics'] as List?)?.cast<String>();
+
+  /// Whether the log was removed, due to a chain reorganization. False if it's
+  /// a valid log.
+  final bool? removed;
+
+  /// Log index position in the block. `null` when the transaction which caused
+  /// this log has not yet been mined.
+  final int? logIndex;
+
+  /// Transaction index position in the block.
+  /// `null` when the transaction which caused this log has not yet been mined.
+  final int? transactionIndex;
+
+  /// Hash of the transaction which caused this log. `null` when it's pending.
+  final String? transactionHash;
+
+  /// Hash of the block where this log was in. `null` when it's pending.
+  final String? blockHash;
+
+  /// The block number of the block where this log was in. `null` when it's
+  /// pending.
+  final int? blockNum;
+
+  /// The address (of the smart contract) from which this log originated.
+  final EthereumAddress? address;
+
+  /// The data blob of this log, hex-encoded.
+  ///
+  /// For solidity events, this contains all non-indexed parameters of the
+  /// event.
+  final String? data;
+
+  /// The topics of this event, hex-encoded.
+  ///
+  /// For solidity events, the first topic is a hash of the event signature
+  /// (except for anonymous events). All further topics are the encoded
+  /// values of indexed parameters.
+  final List<String>? topics;
 
   @override
   String toString() {
@@ -177,6 +204,33 @@ class FilterEvent {
         'topics=$topics'
         ')';
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FilterEvent &&
+          runtimeType == other.runtimeType &&
+          removed == other.removed &&
+          logIndex == other.logIndex &&
+          transactionIndex == other.transactionIndex &&
+          transactionHash == other.transactionHash &&
+          blockHash == other.blockHash &&
+          blockNum == other.blockNum &&
+          address == other.address &&
+          data == other.data &&
+          const ListEquality().equals(topics, other.topics);
+
+  @override
+  int get hashCode =>
+      removed.hashCode ^
+      logIndex.hashCode ^
+      transactionIndex.hashCode ^
+      transactionHash.hashCode ^
+      blockHash.hashCode ^
+      blockNum.hashCode ^
+      address.hashCode ^
+      data.hashCode ^
+      topics.hashCode;
 }
 
 class _EventFilter extends _Filter<FilterEvent> {
@@ -200,13 +254,13 @@ class _EventFilter extends _Filter<FilterEvent> {
   dynamic _createParamsObject(bool includeFromAndTo) {
     final encodedOptions = <String, dynamic>{};
     if (options.fromBlock != null && includeFromAndTo) {
-      encodedOptions['fromBlock'] = options.fromBlock.toBlockParam();
+      encodedOptions['fromBlock'] = options.fromBlock?.toBlockParam();
     }
     if (options.toBlock != null && includeFromAndTo) {
-      encodedOptions['toBlock'] = options.toBlock.toBlockParam();
+      encodedOptions['toBlock'] = options.toBlock?.toBlockParam();
     }
     if (options.address != null) {
-      encodedOptions['address'] = options.address.hex;
+      encodedOptions['address'] = options.address?.hex;
     }
     if (options.topics != null) {
       encodedOptions['topics'] = options.topics;
@@ -217,58 +271,50 @@ class _EventFilter extends _Filter<FilterEvent> {
 
   @override
   FilterEvent parseChanges(log) {
-    return FilterEvent(
-      removed: log['removed'] as bool ?? false,
-      logIndex: hexToInt(log['logIndex'] as String).toInt(),
-      transactionIndex: hexToInt(log['logIndex'] as String).toInt(),
-      transactionHash: log['transactionHash'] as String,
-      blockHash: log['blockHash'] as String,
-      blockNum: hexToInt(log['blockNumber'] as String).toInt(),
-      address: EthereumAddress.fromHex(log['address'] as String),
-      data: log['data'] as String,
-      topics: (log['topics'] as List).cast<String>(),
-    );
+    return FilterEvent.fromMap(log as Map<String, dynamic>);
   }
 }
 
 const _pingDuration = Duration(seconds: 2);
 
 class _FilterEngine {
+  _FilterEngine(this._client);
+
   final List<_InstantiatedFilter> _filters = [];
   final Web3Client _client;
 
-  JsonRPC get _rpc => _client._jsonRpc;
+  RpcService get _rpc => _client._jsonRpc;
 
-  Timer _ticker;
+  Timer? _ticker;
   bool _isRefreshing = false;
   bool _clearingBecauseSocketClosed = false;
 
   final List<Future> _pendingUnsubcriptions = [];
 
-  _FilterEngine(this._client);
-
   Stream<T> addFilter<T>(_Filter<T> filter) {
-    final pubSubParams = filter.createPubSub();
     final pubSubAvailable = _client.socketConnector != null;
-    final supportsPubSub = pubSubParams != null && pubSubAvailable;
 
-    _InstantiatedFilter<T> instantiated;
-    instantiated = _InstantiatedFilter(filter, supportsPubSub, () {
+    late _InstantiatedFilter<T> instantiated;
+    instantiated = _InstantiatedFilter(
+        filter, filter.supportsPubSub && pubSubAvailable, () {
       _pendingUnsubcriptions.add(uninstall(instantiated));
     });
-    _filters.add(instantiated);
 
-    if (instantiated.isPubSub) {
-      _registerToPubSub(instantiated, pubSubParams);
-    } else {
-      _registerToAPI(instantiated);
-      _startTicking();
-    }
+    instantiated._controller.onListen = () {
+      _filters.add(instantiated);
+
+      if (instantiated.isPubSub) {
+        _registerToPubSub(instantiated, filter.createPubSub());
+      } else {
+        _registerToAPI(instantiated);
+        _startTicking();
+      }
+    };
 
     return instantiated._controller.stream;
   }
 
-  void _registerToAPI(_InstantiatedFilter filter) async {
+  Future<void> _registerToAPI(_InstantiatedFilter filter) async {
     final request = filter.filter.create();
 
     try {
@@ -281,12 +327,12 @@ class _FilterEngine {
     }
   }
 
-  void _registerToPubSub(
+  Future<void> _registerToPubSub(
       _InstantiatedFilter filter, _PubSubCreationParams params) async {
     final peer = _client._connectWithPeer();
 
     try {
-      final response = await peer.sendRequest('eth_subscribe', params.params);
+      final response = await peer?.sendRequest('eth_subscribe', params.params);
       filter.id = response as String;
     } on rpc.RpcException catch (e, s) {
       filter._controller.addError(e, s);
@@ -299,18 +345,18 @@ class _FilterEngine {
     _ticker ??= Timer.periodic(_pingDuration, (_) => _refreshFilters());
   }
 
-  void _refreshFilters() async {
+  Future<void> _refreshFilters() async {
     if (_isRefreshing) return;
     _isRefreshing = true;
 
     try {
       final filterSnapshot = List.of(_filters);
 
-      for (var filter in filterSnapshot) {
+      for (final filter in filterSnapshot) {
         final updatedData =
             await _rpc.call('eth_getFilterChanges', [filter.id]);
 
-        for (var payload in updatedData.result) {
+        for (final payload in updatedData.result) {
           if (!filter._controller.isClosed) {
             _parseAndAdd(filter, payload);
           }
@@ -325,8 +371,8 @@ class _FilterEngine {
     final id = params['subscription'].asString;
     final result = params['result'].value;
 
-    final filter = _filters.singleWhere((f) => f.isPubSub && f.id == id,
-        orElse: () => null);
+    final filter = _filters.singleWhere((f) => f.isPubSub && f.id == id);
+    // orElse: () => null);
     _parseAndAdd(filter, result);
   }
 
@@ -335,9 +381,7 @@ class _FilterEngine {
       _clearingBecauseSocketClosed = true;
       final pubSubFilters = _filters.where((f) => f.isPubSub).toList();
 
-      for (var filter in pubSubFilters) {
-        uninstall(filter);
-      }
+      pubSubFilters.forEach(uninstall);
     } finally {
       _clearingBecauseSocketClosed = false;
     }
@@ -354,7 +398,7 @@ class _FilterEngine {
 
     if (filter.isPubSub && !_clearingBecauseSocketClosed) {
       final connection = _client._connectWithPeer();
-      await connection.sendRequest('eth_unsubscribe', [filter.id]);
+      await connection?.sendRequest('eth_unsubscribe', [filter.id]);
     } else {
       await _rpc.call('eth_uninstallFilter', [filter.id]);
     }
@@ -374,7 +418,7 @@ class _FilterEngine {
 class _InstantiatedFilter<T> {
   /// The id of this filter. This value will be obtained from the API after the
   /// filter has been set up and is `null` before that.
-  String id;
+  String? id;
   final _Filter<T> filter;
 
   /// Whether the filter is listening on a websocket connection.

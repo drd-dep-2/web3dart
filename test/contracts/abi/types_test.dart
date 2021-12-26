@@ -1,4 +1,4 @@
-import 'package:test_api/test_api.dart';
+import 'package:test/test.dart';
 import 'package:web3dart/contracts.dart';
 
 final abiTypes = <String, AbiType>{
@@ -49,8 +49,12 @@ void main() {
   });
 
   test('rejects invalid types', () {
-    for (var invalid in invalidTypes) {
-      expect(() => parseAbiType(invalid), throwsA(anything));
+    for (final invalid in invalidTypes) {
+      expect(
+        () => parseAbiType(invalid),
+        throwsA(anything),
+        reason: '$invalid is not a valid type',
+      );
     }
   });
 }

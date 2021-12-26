@@ -1,4 +1,4 @@
-import 'package:test_api/test_api.dart';
+import 'package:test/test.dart';
 import 'package:web3dart/contracts.dart';
 
 import 'utils.dart';
@@ -17,7 +17,7 @@ final dynamicData = [
   [BigInt.from(1), BigInt.from(2), BigInt.from(3)],
 ];
 
-final dynamicEncoded =
+const dynamicEncoded =
     '0000000000000000000000000000000000000000000000000000000000000060'
     '0000000000000000000000000000000000000000000000000000000000000001'
     '00000000000000000000000000000000000000000000000000000000000000a0'
@@ -35,7 +35,7 @@ const staticTuple = TupleType([
 
 final staticData = [BigInt.from(0x45), true];
 
-final staticEncoded =
+const staticEncoded =
     '0000000000000000000000000000000000000000000000000000000000000045'
     '0000000000000000000000000000000000000000000000000000000000000001';
 

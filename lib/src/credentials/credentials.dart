@@ -1,7 +1,17 @@
-part of 'package:web3dart/credentials.dart';
+import 'dart:convert';
+import 'dart:math';
+import 'dart:typed_data';
 
-/// The sign method from sec256k1, so that it can be used inside [Credentials].
-const _globalSign = sign;
+import 'package:collection/collection.dart';
+import 'package:pointycastle/ecc/api.dart' show ECPoint;
+
+import '../../web3dart.dart' show Transaction;
+import '../crypto/formatting.dart';
+import '../crypto/keccak.dart';
+import '../crypto/secp256k1.dart';
+import '../crypto/secp256k1.dart' as secp256k1;
+import '../utils/typed_data.dart';
+import 'address.dart';
 
 /// Anything that can sign payloads with a private key.
 abstract class Credentials {
@@ -20,12 +30,14 @@ abstract class Credentials {
   /// bytes representation of the [eth_sign RPC method](https://github.com/ethereum/wiki/wiki/JSON-RPC#eth_sign),
   /// but without the "Ethereum signed message" prefix.
   /// The [payload] parameter contains the raw data, not a hash.
-  Future<Uint8List> sign(Uint8List payload, {int chainId}) async {
-    final signature = await signToSignature(payload, chainId: chainId);
+  Future<Uint8List> sign(Uint8List payload,
+      {int? chainId, bool isEIP1559 = false}) async {
+    final signature =
+        await signToSignature(payload, chainId: chainId, isEIP1559: isEIP1559);
 
-    final r = _padTo32(intToBytes(signature.r));
-    final s = _padTo32(intToBytes(signature.s));
-    final v = intToBytes(BigInt.from(signature.v));
+    final r = padUint8ListTo32(unsignedIntToBytes(signature.r));
+    final s = padUint8ListTo32(unsignedIntToBytes(signature.s));
+    final v = unsignedIntToBytes(BigInt.from(signature.v));
 
     // https://github.com/ethereumjs/ethereumjs-util/blob/8ffe697fafb33cefc7b7ec01c11e3a7da787fe0e/src/signature.ts#L63
     return uint8ListFromList(r + s + v);
@@ -33,12 +45,13 @@ abstract class Credentials {
 
   /// Signs the [payload] with a private key and returns the obtained
   /// signature.
-  Future<MsgSignature> signToSignature(Uint8List payload, {int chainId});
+  Future<MsgSignature> signToSignature(Uint8List payload,
+      {int? chainId, bool isEIP1559 = false});
 
   /// Signs an Ethereum specific signature. This method is equivalent to
   /// [sign], but with a special prefix so that this method can't be used to
   /// sign, for instance, transactions.
-  Future<Uint8List> signPersonalMessage(Uint8List payload, {int chainId}) {
+  Future<Uint8List> signPersonalMessage(Uint8List payload, {int? chainId}) {
     final prefix = _messagePrefix + payload.length.toString();
     final prefixBytes = ascii.encode(prefix);
 
@@ -47,24 +60,44 @@ abstract class Credentials {
 
     return sign(concat, chainId: chainId);
   }
+}
 
-  Uint8List _padTo32(Uint8List data) {
-    assert(data.length <= 32);
-    if (data.length == 32) return data;
+/// Credentials where the [address] is known synchronously.
+abstract class CredentialsWithKnownAddress extends Credentials {
+  /// The ethereum address belonging to this credential.
+  EthereumAddress get address;
 
-    // todo there must be a faster way to do this?
-    return Uint8List(32)..setRange(32 - data.length, 32, data);
+  @override
+  Future<EthereumAddress> extractAddress() async {
+    return Future.value(address);
   }
 }
 
+/// Interface for [Credentials] that don't sign transactions locally, for
+/// instance because the private key is not known to this library.
+abstract class CustomTransactionSender extends Credentials {
+  Future<String> sendTransaction(Transaction transaction);
+}
+
 /// Credentials that can sign payloads with an Ethereum private key.
-class EthPrivateKey extends Credentials {
+class EthPrivateKey extends CredentialsWithKnownAddress {
+  /// ECC's d private parameter.
+  final BigInt privateKeyInt;
   final Uint8List privateKey;
-  EthereumAddress _cachedAddress;
+  EthereumAddress? _cachedAddress;
 
-  EthPrivateKey(this.privateKey);
+  /// Creates a private key from a byte array representation.
+  ///
+  /// The bytes are interpreted as an unsigned integer forming the private key.
+  EthPrivateKey(this.privateKey)
+      : privateKeyInt = bytesToUnsignedInt(privateKey);
 
-  EthPrivateKey.fromHex(String hex) : privateKey = hexToBytes(hex);
+  /// Parses a private key from a hexadecimal representation.
+  EthPrivateKey.fromHex(String hex) : this(hexToBytes(hex));
+
+  /// Creates a private key from the underlying number.
+  EthPrivateKey.fromInt(this.privateKeyInt)
+      : privateKey = unsignedIntToBytes(privateKeyInt);
 
   /// Creates a new, random private key from the [random] number generator.
   ///
@@ -81,20 +114,42 @@ class EthPrivateKey extends Credentials {
   final bool isolateSafe = true;
 
   @override
-  Future<EthereumAddress> extractAddress() async {
-    return _cachedAddress ??= EthereumAddress(
-        publicKeyToAddress(privateKeyBytesToPublic(privateKey)));
+  EthereumAddress get address {
+    return _cachedAddress ??=
+        EthereumAddress(publicKeyToAddress(privateKeyToPublic(privateKeyInt)));
   }
 
+  /// Get the encoded public key in an (uncompressed) byte representation.
+  Uint8List get encodedPublicKey => privateKeyToPublic(privateKeyInt);
+
+  /// The public key corresponding to this private key.
+  ECPoint get publicKey => (params.G * privateKeyInt)!;
+
   @override
-  Future<MsgSignature> signToSignature(Uint8List payload, {int chainId}) async {
-    final signature = _globalSign(keccak256(payload), privateKey);
+  Future<MsgSignature> signToSignature(Uint8List payload,
+      {int? chainId, bool isEIP1559 = false}) async {
+    final signature = secp256k1.sign(keccak256(payload), privateKey);
 
     // https://github.com/ethereumjs/ethereumjs-util/blob/8ffe697fafb33cefc7b7ec01c11e3a7da787fe0e/src/signature.ts#L26
     // be aware that signature.v already is recovery + 27
-    final chainIdV =
-        chainId != null ? (signature.v - 27 + (chainId * 2 + 35)) : signature.v;
-
+    int chainIdV;
+    if (isEIP1559) {
+      chainIdV = signature.v - 27;
+    } else {
+      chainIdV = chainId != null
+          ? (signature.v - 27 + (chainId * 2 + 35))
+          : signature.v;
+    }
     return MsgSignature(signature.r, signature.s, chainIdV);
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EthPrivateKey &&
+          runtimeType == other.runtimeType &&
+          const ListEquality().equals(privateKey, other.privateKey);
+
+  @override
+  int get hashCode => privateKey.hashCode;
 }

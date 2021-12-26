@@ -1,4 +1,7 @@
-part of 'package:web3dart/crypto.dart';
+import 'dart:typed_data';
+import 'package:convert/convert.dart';
+// ignore: implementation_imports
+import 'package:pointycastle/src/utils.dart' as p_utils;
 
 /// If present, removes the 0x from the start of a hex-string.
 String strip0x(String hex) {
@@ -17,7 +20,7 @@ String strip0x(String hex) {
 /// prefix does not count for the length.
 String bytesToHex(List<int> bytes,
     {bool include0x = false,
-    int forcePadLength,
+    int? forcePadLength,
     bool padToEvenLength = false}) {
   var encoded = hex.encode(bytes);
 
@@ -32,7 +35,7 @@ String bytesToHex(List<int> bytes,
     encoded = '0$encoded';
   }
 
-  return (include0x ? '0x' : '') + hex.encode(bytes);
+  return (include0x ? '0x' : '') + encoded;
 }
 
 /// Converts the hexadecimal string, which can be prefixed with 0x, to a byte
@@ -44,7 +47,17 @@ Uint8List hexToBytes(String hexStr) {
   return Uint8List.fromList(bytes);
 }
 
-///Converts the bytes from that list (big endian) to an unsigned BigInt.
+Uint8List unsignedIntToBytes(BigInt number) {
+  assert(!number.isNegative);
+  return p_utils.encodeBigIntAsUnsigned(number);
+}
+
+BigInt bytesToUnsignedInt(Uint8List bytes) {
+  return p_utils.decodeBigIntWithSign(1, bytes);
+}
+
+///Converts the bytes from that list (big endian) to a (potentially signed)
+/// BigInt.
 BigInt bytesToInt(List<int> bytes) => p_utils.decodeBigInt(bytes);
 
 Uint8List intToBytes(BigInt number) => p_utils.encodeBigInt(number);
@@ -56,5 +69,5 @@ BigInt hexToInt(String hex) {
 
 /// Converts the hexadecimal input and creates an [int].
 int hexToDartInt(String hex) {
-  return int.parse(strip0x(hex));
+  return int.parse(strip0x(hex), radix: 16);
 }

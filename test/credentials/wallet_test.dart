@@ -1,16 +1,14 @@
 import 'dart:convert';
-import 'dart:io';
 
-import 'package:path/path.dart';
-import 'package:test_api/test_api.dart';
+import 'package:test/test.dart';
 import 'package:web3dart/credentials.dart';
 import 'package:web3dart/crypto.dart';
 
-void main() {
-  final file = File(join('test', 'credentials', 'example_keystores.json'));
-  final wallets = json.decode(file.readAsStringSync()) as Map;
+import 'example_keystores.dart' as data;
 
-  // ignore: cascade_invocations
+void main() {
+  final wallets = json.decode(data.content) as Map;
+
   wallets.forEach((testName, content) {
     test('unlocks wallet $testName', () {
       final password = content['password'] as String;
@@ -24,6 +22,6 @@ void main() {
 
       expect(encodedWallet['crypto']['ciphertext'],
           walletData['crypto']['ciphertext']);
-    }, timeout: const Timeout.factor(2));
+    }, tags: 'expensive');
   });
 }
