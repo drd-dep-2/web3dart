@@ -25,16 +25,22 @@ class Web3Client {
   /// [httpClient] will be used to send requests to the rpc server.
   /// Am isolate will be used to perform expensive operations, such as signing
   /// transactions or computing private keys.
+  // Web3Client({
+  //   required this.url,
+  //   required this.httpClient,
+  //   this.socketConnector
+  // }) : this.custom(JsonRPC(url, client));
   Web3Client(String url, Client httpClient, {SocketConnector? socketConnector})
-      : this.custom(JsonRPC(url, httpClient), socketConnector: socketConnector);
+      : this.custom(JsonRPC(url, httpClient), socketConnector: socketConnector, url: url, httpClient: httpClient);
 
-  Web3Client.custom(RpcService rpc, {this.socketConnector}) : _jsonRpc = rpc {
+  Web3Client.custom(RpcService rpc, {this.socketConnector, required this.url, required this.httpClient}) : _jsonRpc = rpc {
     _filters = _FilterEngine(this);
   }
 
   static const BlockNum _defaultBlock = BlockNum.current();
-
-  final RpcService _jsonRpc;
+  late final String url;
+  late final Client httpClient;
+  late final RpcService _jsonRpc;
 
   /// Some ethereum nodes support an event channel over websockets. Web3dart
   /// will use the [StreamChannel] returned by this function as a socket to send
